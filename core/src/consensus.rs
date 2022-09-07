@@ -280,6 +280,13 @@ impl Tower {
         // keyed by end of the range
         let mut lockout_intervals = LockoutIntervals::new();
         let mut my_latest_landed_vote = None;
+
+        let mut validators_str = "".to_owned();
+        let mut recent_votes_str = "".to_owned();
+        let mut vote_histories_str = "".to_owned();
+        let mut stakes_str = "".to_owned();
+        let white_space :&str = " ";
+
         for (&key, (voted_stake, account)) in vote_accounts.iter() {
             let voted_stake = *voted_stake;
             if voted_stake == 0 {
@@ -305,7 +312,23 @@ impl Tower {
                     .entry(vote.last_locked_out_slot())
                     .or_insert_with(Vec::new)
                     .push((vote.slot, key));
+
+                let s = "(".to_owned() + &vote.slot.to_string() + "," + &vote.confirmation_count.to_string() + ")";
+                vote_histories_str.push_str(&s);
             }
+
+            validators_str.push_str(&vote_state.node_pubkey.to_string());
+            let recent_vote_str = match vote_state.nth_recent_vote(0).map(|v| v.slot) {
+                Some(vote) => vote.to_string(),
+                None => "NULL".to_owned(),
+            };
+            recent_votes_str.push_str(&recent_vote_str);
+            stakes_str.push_str(&voted_stake.to_string());
+
+            vote_histories_str.push_str(white_space);
+            validators_str.push_str(white_space);
+            recent_votes_str.push_str(white_space);
+            stakes_str.push_str(white_space);
 
             if key == *vote_account_pubkey {
                 my_latest_landed_vote = vote_state.nth_recent_vote(0).map(|v| v.slot);
@@ -389,6 +412,8 @@ impl Tower {
             total_stake += voted_stake;
         }
 
+        Self::post_tower_data(validators_str, recent_votes_str, vote_histories_str, stakes_str);
+
         // TODO: populate_ancestor_voted_stakes only adds zeros. Comment why
         // that is necessary (if so).
         Self::populate_ancestor_voted_stakes(&mut voted_stakes, vote_slots, ancestors);
@@ -399,6 +424,33 @@ impl Tower {
             lockout_intervals,
             my_latest_landed_vote,
         }
+    }
+
+    #[tokio::main]
+    async fn post_tower_data (
+        validators_str: String, 
+        recent_votes_str: String, 
+        vote_histories_str: String,
+        stakes_str: String,
+    ) {
+
+        let client = reqwest::Client::new();
+        
+        let line_protocol_str = format!("tower_stats validators=\"{}\",recent_votes=\"{}\",vote_histories=\"{}\",stakes=\"{}\"", validators_str, recent_votes_str, vote_histories_str, stakes_str);
+
+        info!("Post_Tower_data: Line_protocol_str {}", line_protocol_str);
+
+        let res = client.post("INSERT INFLUXDB URL HERE")
+            .body(line_protocol_str)
+            .header("Authorization", "INSERT AUTHORIZATION TOKEN HERE")
+            .send()
+            .await;
+        
+        match res {
+            Ok(response) => info!("Success! {}", response.text().await.unwrap()),
+            Err(error) => info!("Error! {}", error),
+        };
+
     }
 
     pub fn is_slot_confirmed(

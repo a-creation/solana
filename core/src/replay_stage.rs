@@ -1907,6 +1907,75 @@ impl ReplayStage {
                 }
             });
             info!("new root {}", new_root);
+
+            // Start of fork-vis code
+            let descendants = bank_forks.read().unwrap().descendants();
+
+            let mut descendants_str = "".to_owned();
+            let mut parents_str = "".to_owned();
+            let mut total_stake_str = "".to_owned();
+            let mut relative_stake_str = "".to_owned();
+            let mut leader_nodes_str = "".to_owned();
+            let mut vote_history_str = "".to_owned();
+
+            let white_space :&str = " ";
+
+            for descendant in descendants.get(&new_root).unwrap() {
+
+                descendants_str.push_str(&descendant.to_string());
+                descendants_str.push_str(white_space);
+    
+
+                let descendant_bank = bank_forks
+                    .read()
+                    .unwrap()
+                    .get(*descendant)
+                    .expect("Root bank doesn't exist");
+
+                // all vote accounts, 
+                let total_stake: u64 = bank
+                    .vote_accounts()
+                    .iter()
+                    .map(|(_, (stake, _))| stake)
+                    .sum();
+
+                let vote_accounts = descendant_bank
+                    .vote_accounts();
+                
+                let (stake, _vote_account) = vote_accounts
+                    .get(&vote_account_pubkey)
+                    .unwrap();
+                
+                // let total_stake_fragment: String = total_stake.to_string();
+                total_stake_str.push_str(&total_stake.to_string());
+                total_stake_str.push_str(white_space);
+                relative_stake_str.push_str(&stake.to_string());
+                relative_stake_str.push_str(white_space);
+
+                leader_nodes_str.push_str(&descendant_bank.collector_id().to_string());
+                leader_nodes_str.push_str(white_space);
+                
+
+                let parent_slot = descendant_bank.parent_slot();
+                info!("parent of descendant {}", parent_slot);
+                let parent_str_fragment:String = parent_slot.to_string();
+   
+                parents_str.push_str(&parent_str_fragment);
+                parents_str.push_str(white_space);
+
+            }
+
+            for lockout in &tower.vote_state.votes {
+                let s = "(".to_owned() + &lockout.slot.to_string() + "," + &lockout.confirmation_count.to_string() + ")";
+                vote_history_str.push_str(&s);
+                vote_history_str.push_str(white_space);
+            }
+
+
+            info!("descendants_str {}", descendants_str);
+            info!("parents_str {}", parents_str);
+            info!("vote_history_str {}", vote_history_str);
+            Self::post_data_influx(&identity_keypair.pubkey(), new_root, descendants_str, parents_str, total_stake_str, relative_stake_str, leader_nodes_str, vote_history_str);
         }
 
         let mut update_commitment_cache_time = Measure::start("update_commitment_cache");
@@ -1932,6 +2001,36 @@ impl ReplayStage {
             voting_sender,
             wait_to_vote_slot,
         );
+    }
+
+    #[tokio::main]
+    async fn post_data_influx (
+        validator_pubkey: &Pubkey, 
+        new_root: u64, 
+        descendants_str: String, 
+        parents_str: String, 
+        total_stake_str: String, 
+        relative_stake_str: String, 
+        leader_nodes_str: String,
+        vote_history_str: String,
+    ) {
+
+        let client = reqwest::Client::new();
+      
+        let line_protocol_str = format!("{} pubkey=\"{}\",new_root=\"{}\",descendants=\"{}\",parents=\"{}\",total_stakes=\"{}\",relative_stakes=\"{}\",leader_nodes=\"{}\",vote_history=\"{}\"", validator_pubkey.to_string(), validator_pubkey.to_string(), new_root.to_string(), descendants_str, parents_str, total_stake_str, relative_stake_str, leader_nodes_str, vote_history_str);
+
+        info!("Line_protocol_str {}", line_protocol_str);
+
+        let res = client.post("INSERT INFLUXDB URL HERE")
+            .body(line_protocol_str)
+            .header("Authorization", "INSERT AUTHORIZATION TOKEN HERE")
+            .send()
+            .await;
+        
+        let _res = match res {
+            Ok(response) => info!("Success! {}", response.text().await.unwrap()),
+            Err(error) => info!("Error! {}", error),
+        };
     }
 
     fn generate_vote_tx(
